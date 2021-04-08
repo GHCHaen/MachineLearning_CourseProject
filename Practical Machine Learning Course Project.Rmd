@@ -1,0 +1,93 @@
+---
+author: "C. Haen"
+date: "4/6/2021"
+output:
+  html_document:
+    df_print: paged
+---
+
+# Predicting Effective Exercise
+
+## Summary
+
+Utilizing on-body sensor data provided by [Groupware@LES Human Activity Recognition](http://groupware.les.inf.puc-rio.br/har), we attempt to predict how well a weight lifting activity was performed. The data consist of accelerometer measurements from sensors fitted at the waist, upper arm, wrist and the weight itself. These measurements are separated into 5 classes, one being the weight lifting activity performed in the recommended method and the others comprising common mistakes for the activity. Fitting a random forest model we were able to predict the activity class with 98.88% accuracy.
+
+## Data Exploration
+
+After loading the data we must determine which variables to use as predictors for the activity class (variable name = "classe"). We eliminate variables which are record information and not sensor measurements, we eliminate variables for which the majority of values are NA and finally we eliminate variables with near zero variance as these will not be valuable predictors.
+
+```{r}
+suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(caret))
+suppressPackageStartupMessages(library(doParallel))
+suppressPackageStartupMessages(library(corrplot))
+
+## Set a random seed value for reproducibility
+set.seed(8675309)
+
+## Create processing core cluster for parallel operations
+coreCluster <- makeCluster(detectCores() - 1)
+registerDoParallel(coreCluster)
+
+## Read in training data, treating strings "NA" and "#DIV/0!" as NA values
+## to prevent being treated as character data.
+pmlData <- read.csv("./pml-training.csv", na.strings = c("NA", "#DIV/0!"))
+
+pmlData <- pmlData %>%
+    # Remove record information variables
+    select(-X, -user_name, -raw_timestamp_part_1, -raw_timestamp_part_2,
+           -cvtd_timestamp, -new_window, -num_window) %>%
+    # Remove variables with near zero variance.
+    select(-nearZeroVar(pmlData))
+
+pmlData <- pmlData %>%
+    # Remove majority NA variables - using 50% as threshold.
+    select(-which(colSums(is.na(pmlData) / nrow(pmlData)) > 0.5)) %>%
+    # Convert classe into a factor
+    mutate(classe = factor(classe))
+```
+
+The next step in defining features for our model is to evaluate which are very highly correlated and remove what we can to produce a more parsimonious model and improve compute performance on our training even though reducing the feature list may impact the prediction accuracy and increase bias.
+
+```{r}
+## Calculate and plot the correlation matrix
+varCorrelations <- cor(pmlData %>% select(-classe))
+corrplot(varCorrelations, method = "color", type = "lower", tl.cex = 0.6)
+
+## Determine which variable pairs are the most highly correlated (a
+## cutoff of 0.95 is used) and eliminate the one having the highest mean
+## correlation
+highlyCorrelated <- findCorrelation(varCorrelations, cutoff = 0.95, 
+                                    verbose = TRUE)
+pmlData <- pmlData %>% select(-all_of(highlyCorrelated))
+```
+
+With our features chosen, the data must be separated into Training and Testing partitions in order to evaluate our prediction accuracy. We retain 30% of the data for testing and the remainder for training our model.
+
+```{r}
+inTraining <- createDataPartition(pmlData$classe, p = 0.7, list = FALSE)
+pmlTraining <- pmlData[inTraining, ]
+pmlTesting <- pmlData[-inTraining, ]
+```
+
+## Fitting a Model
+
+A cross-validation control is created for training , repeated k-fold cross validation is used.
+
+```{r}
+cvControl <- trainControl(method="repeatedcv", repeats = 5, 
+                          allowParallel = TRUE)
+```
+
+A random forest model will be used for prediction on this data set because it often produces a highly accurate model although at the expense of interpretability and computational complexity.
+
+```{r}
+rfModel <- train(classe ~ ., data = pmlTraining, method = "rf",
+                 trControl = cvControl)
+
+rfModel$finalModel
+plot(rfModel)
+confusionMatrix(predict(rfModel, newdata = pmlTesting), pmlTesting$classe)
+```
+
+The resulting accuracy of 98.88% and lower bound confidence interval of 98.58% indicate we can be highly confident that our random forest model can predict the quality of performance in the weight lifting activity.
