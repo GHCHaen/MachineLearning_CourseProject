@@ -3,7 +3,7 @@ author: "C. Haen"
 date: "4/6/2021"
 output:
   html_document:
-    df_print: paged
+      keep_md: true
 ---
 
 # Predicting Effective Exercise
